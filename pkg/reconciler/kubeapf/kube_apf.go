@@ -66,6 +66,8 @@ func NewKubeApfDelegator(
 	// start APF on the default Cluster
 	flowcontrolClient := kubeCluster.Cluster(defaultCluster).FlowcontrolV1beta2()
 	scopedSharedInformerFactory := newFilter.scopingSharedInformerFactory.ForCluster(defaultCluster)
+
+	klog.V(3).InfoS("Creating new apf controller for cluster", "clusterName", defaultCluster)
 	newFilter.delegates[defaultCluster] = utilflowcontrol.New(scopedSharedInformerFactory, flowcontrolClient, serverConcurrencyLimit, requestWaitLimit)
 
 	return newFilter
@@ -85,7 +87,6 @@ func (k *KubeApfDelegator) Handle(ctx context.Context,
 
 	delegate, _ := k.getOrCreateDelegate(cluster.Name)
 
-	// k.delegates[defaultCluster].Handle(ctx, requestDigest, noteFn, workEstimator, queueNoteFn, execFn)
 	delegate.Handle(ctx, requestDigest, noteFn, workEstimator, queueNoteFn, execFn)
 }
 
@@ -149,7 +150,7 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 	// }()
 
 	// TODO: new delegate should use cluster scoped informer factory and flowcontrol clients
-	scopedInformerFactory := k.scopingSharedInformerFactory.ForCluster(defaultCluster)
+	scopedInformerFactory := k.scopingSharedInformerFactory.ForCluster(clusterName)
 	flowcontrolClient := k.kubeCluster.Cluster(clusterName).FlowcontrolV1beta2()
 	delegate = utilflowcontrol.New(
 		scopedInformerFactory,
@@ -164,6 +165,6 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 	// Start cluster scoped apf controller
 	go delegate.Run(stopCh)
 
-	klog.V(3).InfoS("Starting new apf controller for cluster", "clusterName", clusterName)
+	klog.V(3).InfoS("Started new apf controller for cluster", "clusterName", clusterName)
 	return delegate, nil
 }
