@@ -18,7 +18,6 @@ import (
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
 	fq "k8s.io/apiserver/pkg/util/flowcontrol/fairqueuing"
 	fcrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
-	flowcontrolclient "k8s.io/client-go/kubernetes/typed/flowcontrol/v1beta2"
 )
 
 // KubeApfDelegator implements k8s APF controller interface
@@ -28,24 +27,26 @@ import (
 type KubeApfDelegator struct {
 	// scopingInformerFactory is not cluster scoped but can be made cluster scoped
 	scopingSharedInformerFactory *scopingSharedInformerFactory
-	// scopingGenericSharedInformerFactory *kubequota.ScopingGenericSharedInformerFactory
+	// kubeCluster ClusterInterface can be used to get cluster scoped clientset
 	kubeCluster kubernetes.ClusterInterface
-
-	// flowcontrolClient should be cluster scoped
-	flowcontrolClient flowcontrolclient.FlowcontrolV1beta2Interface
 
 	// for now assume these are globl configurations for all logical clusters to inherit
 	serverConcurrencyLimit int
 	requestWaitLimit       time.Duration
 
-	// delegates stores the references to cluster scoped apf filters
+	// delegates are the references to cluster scoped apf controllers
 	delegates map[logicalcluster.Name]utilflowcontrol.Interface
 
 	lock sync.RWMutex
+
+	pathRecorderMux *mux.PathRecorderMux
+
+	stopCh <-chan struct{}
 }
 
 // Make sure utilflowcontrol.Interface is implemented
 var _ utilflowcontrol.Interface = &KubeApfDelegator{}
+
 var defaultCluster logicalcluster.Name = logicalcluster.Wildcard
 
 // NewKubeApfDelegator
@@ -55,22 +56,13 @@ func NewKubeApfDelegator(
 	serverConcurrencyLimit int,
 	requestWaitLimit time.Duration,
 ) *KubeApfDelegator {
-	newFilter := &KubeApfDelegator{
+	return &KubeApfDelegator{
 		scopingSharedInformerFactory: newScopingSharedInformerFactory(informerFactory), // not cluster scoped
 		kubeCluster:                  kubeCluster,                                      // can be made cluster scoped
 		serverConcurrencyLimit:       serverConcurrencyLimit,
 		requestWaitLimit:             requestWaitLimit,
 		delegates:                    map[logicalcluster.Name]utilflowcontrol.Interface{},
 	}
-
-	// start APF on the default Cluster
-	flowcontrolClient := kubeCluster.Cluster(defaultCluster).FlowcontrolV1beta2()
-	scopedSharedInformerFactory := newFilter.scopingSharedInformerFactory.ForCluster(defaultCluster)
-
-	klog.V(3).InfoS("Creating new apf controller for cluster", "clusterName", defaultCluster)
-	newFilter.delegates[defaultCluster] = utilflowcontrol.New(scopedSharedInformerFactory, flowcontrolClient, serverConcurrencyLimit, requestWaitLimit)
-
-	return newFilter
 }
 
 // Handle implements flowcontrol.Interface
@@ -92,32 +84,35 @@ func (k *KubeApfDelegator) Handle(ctx context.Context,
 
 // GetInterestedWatchCount implements flowcontrol.Interface
 func (k *KubeApfDelegator) GetInterestedWatchCount(requestInfo *request.RequestInfo) int {
+	// FIXME: Figure out the right way to implement WatchTracker
 	return k.delegates[defaultCluster].GetInterestedWatchCount(requestInfo)
 }
 
 // RegisterWatch implements flowcontrol.Interface
 func (k *KubeApfDelegator) RegisterWatch(r *http.Request) utilflowcontrol.ForgetWatchFunc {
+	// FIXME: Figure out the right way to implement WatchTracker
 	return k.delegates[defaultCluster].RegisterWatch(r)
 }
 
 // Install implements flowcontrol.Interface
 func (k *KubeApfDelegator) Install(c *mux.PathRecorderMux) {
-	k.delegates[defaultCluster].Install(c)
+	// k.pathRecorderMux = c // store the reference for Install later
+	// Do nothing for now
 }
 
 // MaintainObservations implements flowcontrol.Interface
 func (k *KubeApfDelegator) MaintainObservations(stopCh <-chan struct{}) {
-	k.delegates[defaultCluster].MaintainObservations(stopCh)
+	// TODO: make sure MaintainObservations implementation works with clusters
+	k.stopCh = stopCh
 }
 
 // Run implements flowcontrol.Interface
-// it starts kube apf controller
+// The delegator doesn't actually call apf controller Run here
+// It stores the stopCh for later use when the cluster scoped
+// apf controllers are created
 func (k *KubeApfDelegator) Run(stopCh <-chan struct{}) error {
-	// TODO: start ClusterWorkspaceDeletionMonitor
-
-	// Run kube apf controller. Cluster specific apf controller will be created
-	// on demand
-	return k.delegates[defaultCluster].Run(stopCh)
+	k.stopCh = stopCh
+	return nil
 }
 
 // getOrCreateDelegate creates a utilflowcontrol.Interface (apf filter) for clusterName.
@@ -138,32 +133,24 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 		return delegate, nil
 	}
 
-	// // Set up a context that is cancelable and that is bounded by k.serverDone
-	// ctx, cancel := context.WithCancel(context.Background())
-	// go func() {
-	// 	// Wait for either the context or the server to be done. If it's the server, cancel the context.
-	// 	select {
-	// 	case <-ctx.Done():
-	// 		case <-k.serverDone:
-	// 			cancel()
-	// 	}
-	// }()
-
-	// TODO: new delegate should use cluster scoped informer factory and flowcontrol clients
+	// New delegate uses cluster scoped informer factory and flowcontrol clients
 	scopedInformerFactory := k.scopingSharedInformerFactory.ForCluster(clusterName)
 	flowcontrolClient := k.kubeCluster.Cluster(clusterName).FlowcontrolV1beta2()
 	delegate = utilflowcontrol.New(
+		clusterName.String()+"-controller",
 		scopedInformerFactory,
 		flowcontrolClient,
 		k.serverConcurrencyLimit,
 		k.requestWaitLimit,
 	)
 
+	// TODO: call scopedInformerFactory.Start?
 	k.delegates[clusterName] = delegate
-	// TODO: implement stop channel mechanism
-	stopCh := make(chan struct{})
 	// Start cluster scoped apf controller
-	go delegate.Run(stopCh)
+	go delegate.MaintainObservations(k.stopCh)
+	go delegate.Run(k.stopCh)
+
+	// delegate.Install(k.pathRecorderMux)
 
 	klog.V(3).InfoS("Started new apf controller for cluster", "clusterName", clusterName)
 	return delegate, nil
