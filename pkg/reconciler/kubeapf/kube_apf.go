@@ -145,6 +145,8 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 	)
 
 	// TODO: call scopedInformerFactory.Start?
+	scopedInformerFactory.Start(k.stopCh)
+
 	k.delegates[clusterName] = delegate
 	// Start cluster scoped apf controller
 	go delegate.MaintainObservations(k.stopCh)

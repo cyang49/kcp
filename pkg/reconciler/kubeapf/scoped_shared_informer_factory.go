@@ -2,8 +2,8 @@ package kubeapf
 
 import (
 	reflect "reflect"
-	"sync"
 
+	"github.com/kcp-dev/kcp/pkg/reconciler/common"
 	"github.com/kcp-dev/logicalcluster/v2"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -33,27 +33,32 @@ import (
 // scopingSharedInformerFactory is used to create scopedSharedInformerFactory that
 // targets a specific logical cluster
 type scopingSharedInformerFactory struct {
-	factory informers.SharedInformerFactory
+	factory                informers.SharedInformerFactory
+	delegatingEventHandler *common.DelegatingEventHandler
 }
 
 func newScopingSharedInformerFactory(factory informers.SharedInformerFactory) *scopingSharedInformerFactory {
-	return &scopingSharedInformerFactory{factory: factory}
+	return &scopingSharedInformerFactory{
+		factory:                factory,
+		delegatingEventHandler: common.NewDelegatingEventHandler(),
+	}
 }
 
 // ForCluster returns a scopedSharedInformerFactory that works on a specific logical cluster
 func (f *scopingSharedInformerFactory) ForCluster(clusterName logicalcluster.Name) *scopedSharedInformerFactory {
 	return &scopedSharedInformerFactory{
-		delegate:    f.factory,
-		clusterName: clusterName,
+		delegate:               f.factory,
+		clusterName:            clusterName,
+		delegatingEventHandler: f.delegatingEventHandler,
 	}
 }
 
 // scopedSharedInformerFactory can create informers (currently limited to Flowcontrol)
 // that are for a single cluster
 type scopedSharedInformerFactory struct {
-	lock        sync.RWMutex
-	delegate    informers.SharedInformerFactory
-	clusterName logicalcluster.Name
+	delegate               informers.SharedInformerFactory
+	clusterName            logicalcluster.Name
+	delegatingEventHandler *common.DelegatingEventHandler
 }
 
 var _ informers.SharedInformerFactory = &scopedSharedInformerFactory{}
@@ -137,8 +142,9 @@ func (*scopedSharedInformerFactory) Extensions() extensions.Interface {
 // that is targeting a single cluster
 func (f *scopedSharedInformerFactory) Flowcontrol() flowcontrol.Interface {
 	return &scopedFlowcontrol{
-		clusterName: f.clusterName,
-		delegate:    f.delegate.Flowcontrol(),
+		clusterName:            f.clusterName,
+		delegate:               f.delegate.Flowcontrol(),
+		delegatingEventHandler: f.delegatingEventHandler,
 	}
 }
 

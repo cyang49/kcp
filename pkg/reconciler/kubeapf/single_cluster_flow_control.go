@@ -17,8 +17,9 @@ import (
 )
 
 type scopedFlowcontrol struct {
-	clusterName logicalcluster.Name
-	delegate    flowcontrol.Interface
+	clusterName            logicalcluster.Name
+	delegate               flowcontrol.Interface
+	delegatingEventHandler *common.DelegatingEventHandler
 }
 
 var _ flowcontrol.Interface = &scopedFlowcontrol{}
@@ -38,7 +39,7 @@ func (f *scopedFlowcontrol) V1beta2() v1beta2.Interface {
 	return &scopedFlowcontrolV1Beta2{
 		clusterName:            f.clusterName,
 		delegate:               f.delegate.V1beta2(),
-		delegatingEventHandler: common.NewDelegatingEventHandler(),
+		delegatingEventHandler: f.delegatingEventHandler,
 	}
 }
 
@@ -87,7 +88,7 @@ func (s *scopedFlowSchemaInformer) Informer() cache.SharedIndexInformer {
 	return &common.DelegatingInformer{
 		ClusterName:            s.clusterName,
 		Resource:               apiflowcontrolv1beta2.Resource("flowschema"),
-		SharedIndexInformer:    s.delegate.Informer(),
+		SharedIndexInformer:    s.delegate.Informer(), // this informer is checked through sharedInformerFactory logic, i.e. single instance will be shared
 		DelegatingEventHandler: s.delegatingEventHandler,
 	}
 }
@@ -105,7 +106,7 @@ func (s *scopedPriorityLevelConfigurationInformer) Informer() cache.SharedIndexI
 	return &common.DelegatingInformer{
 		ClusterName:            s.clusterName,
 		Resource:               apiflowcontrolv1beta2.Resource("prioritylevelconfiguration"),
-		SharedIndexInformer:    s.delegate.Informer(),
+		SharedIndexInformer:    s.delegate.Informer(), // this informer is checked through sharedInformerFactory logic, i.e. single instance will be shared
 		DelegatingEventHandler: s.delegatingEventHandler,
 	}
 }
