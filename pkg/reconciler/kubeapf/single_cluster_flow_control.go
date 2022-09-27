@@ -87,7 +87,7 @@ var _ v1beta2.PriorityLevelConfigurationInformer = &scopedPriorityLevelConfigura
 func (s *scopedFlowSchemaInformer) Informer() cache.SharedIndexInformer {
 	return &common.DelegatingInformer{
 		ClusterName:            s.clusterName,
-		Resource:               apiflowcontrolv1beta2.Resource("flowschema"),
+		Resource:               apiflowcontrolv1beta2.Resource("flowschemas"),
 		SharedIndexInformer:    s.delegate.Informer(), // this informer is checked through sharedInformerFactory logic, i.e. single instance will be shared
 		DelegatingEventHandler: s.delegatingEventHandler,
 	}
@@ -105,7 +105,7 @@ func (s *scopedFlowSchemaInformer) Lister() flowcontrollisterv1beta2.FlowSchemaL
 func (s *scopedPriorityLevelConfigurationInformer) Informer() cache.SharedIndexInformer {
 	return &common.DelegatingInformer{
 		ClusterName:            s.clusterName,
-		Resource:               apiflowcontrolv1beta2.Resource("prioritylevelconfiguration"),
+		Resource:               apiflowcontrolv1beta2.Resource("prioritylevelconfigurations"),
 		SharedIndexInformer:    s.delegate.Informer(), // this informer is checked through sharedInformerFactory logic, i.e. single instance will be shared
 		DelegatingEventHandler: s.delegatingEventHandler,
 	}
