@@ -37,7 +37,6 @@ type SOCTController struct {
 
 	getClusterWorkspace func(key string) (*tenancyv1alpha1.ClusterWorkspace, error)
 	getCRD              func(key string) (*apiextensionsv1.CustomResourceDefinition, error)
-	// listCRDs            func() ([]*apiextensionsv1.CustomResourceDefinition, error)
 }
 
 // NewSOCTController
@@ -48,8 +47,9 @@ func NewSOCTController(
 	tracker flowcontrolrequest.KcpStorageObjectCountTracker,
 ) *SOCTController {
 	c := &SOCTController{
-		cwQueue:        workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), SOCTControllerName),
-		crdQueue:       workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), SOCTControllerName),
+		cwQueue:  workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		crdQueue: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+
 		getterRegistry: getterRegistry,
 		tracker:        tracker,
 		getClusterWorkspace: func(key string) (*tenancyv1alpha1.ClusterWorkspace, error) {
@@ -58,9 +58,6 @@ func NewSOCTController(
 		getCRD: func(key string) (*apiextensionsv1.CustomResourceDefinition, error) {
 			return crdInformer.Lister().Get(key)
 		},
-		// listCRDs: func() ([]*apiextensionsv1.CustomResourceDefinition, error) {
-		// 	return crdInformer.Lister().List(labels.Everything())
-		// },
 	}
 
 	clusterWorkspacesInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
