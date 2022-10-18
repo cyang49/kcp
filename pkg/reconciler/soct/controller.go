@@ -104,18 +104,18 @@ func (c *SOCTController) Run(ctx context.Context, stop <-chan struct{}) {
 	klog.Infof("Starting %s controller", SOCTControllerName)
 	defer klog.Infof("Shutting down %s controller", SOCTControllerName)
 
-	go wait.Until(func() { c.startClusterWorkspaceWorker(ctx) }, time.Second, stop)
-	go wait.Until(func() { c.startCrdWorker(ctx) }, time.Second, stop)
+	go wait.Until(func() { c.runClusterWorkspaceWorker(ctx) }, time.Second, stop)
+	go wait.Until(func() { c.runCrdWorker(ctx) }, time.Second, stop)
 
 	<-stop
 }
 
-func (c *SOCTController) startClusterWorkspaceWorker(ctx context.Context) {
+func (c *SOCTController) runClusterWorkspaceWorker(ctx context.Context) {
 	for c.processNext(ctx, c.cwQueue, c.processClusterWorkspace) {
 	}
 }
 
-func (c *SOCTController) startCrdWorker(ctx context.Context) {
+func (c *SOCTController) runCrdWorker(ctx context.Context) {
 	for c.processNext(ctx, c.crdQueue, c.processCrd) {
 	}
 }
@@ -131,6 +131,11 @@ func (c *SOCTController) processNext(
 		return false
 	}
 	key := k.(string)
+
+	logger := logging.WithQueueKey(klog.FromContext(ctx), key)
+	ctx = klog.NewContext(ctx, logger)
+	logger.V(1).Info("soct processing key")
+
 	// No matter what, tell the queue we're done with this key, to unblock
 	// other workers.
 	defer queue.Done(key)
