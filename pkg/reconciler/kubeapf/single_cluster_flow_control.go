@@ -2,7 +2,7 @@ package kubeapf
 
 import (
 	"github.com/kcp-dev/kcp/pkg/indexers"
-	"github.com/kcp-dev/kcp/pkg/reconciler/common"
+	"github.com/kcp-dev/kcp/pkg/reconciler/util"
 	"github.com/kcp-dev/logicalcluster/v2"
 	apiflowcontrolv1beta2 "k8s.io/api/flowcontrol/v1beta2"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -19,7 +19,7 @@ import (
 type scopedFlowcontrol struct {
 	clusterName            logicalcluster.Name
 	delegate               flowcontrol.Interface
-	delegatingEventHandler *common.DelegatingEventHandler
+	delegatingEventHandler *util.DelegatingEventHandler
 }
 
 var _ flowcontrol.Interface = &scopedFlowcontrol{}
@@ -46,7 +46,7 @@ func (f *scopedFlowcontrol) V1beta2() v1beta2.Interface {
 type scopedFlowcontrolV1Beta2 struct {
 	clusterName            logicalcluster.Name
 	delegate               v1beta2.Interface
-	delegatingEventHandler *common.DelegatingEventHandler
+	delegatingEventHandler *util.DelegatingEventHandler
 }
 
 var _ v1beta2.Interface = &scopedFlowcontrolV1Beta2{}
@@ -72,12 +72,12 @@ func (f *scopedFlowcontrolV1Beta2) PriorityLevelConfigurations() v1beta2.Priorit
 type scopedFlowSchemaInformer struct {
 	clusterName            logicalcluster.Name
 	delegate               v1beta2.FlowSchemaInformer
-	delegatingEventHandler *common.DelegatingEventHandler
+	delegatingEventHandler *util.DelegatingEventHandler
 }
 type scopedPriorityLevelConfigurationInformer struct {
 	clusterName            logicalcluster.Name
 	delegate               v1beta2.PriorityLevelConfigurationInformer
-	delegatingEventHandler *common.DelegatingEventHandler
+	delegatingEventHandler *util.DelegatingEventHandler
 }
 
 var _ v1beta2.FlowSchemaInformer = &scopedFlowSchemaInformer{}
@@ -85,7 +85,7 @@ var _ v1beta2.PriorityLevelConfigurationInformer = &scopedPriorityLevelConfigura
 
 // Informer implements v1beta2.FlowSchemaInformer
 func (s *scopedFlowSchemaInformer) Informer() cache.SharedIndexInformer {
-	return &common.DelegatingInformer{
+	return &util.DelegatingInformer{
 		ClusterName:            s.clusterName,
 		Resource:               apiflowcontrolv1beta2.Resource("flowschemas"),
 		SharedIndexInformer:    s.delegate.Informer(), // this informer is checked through sharedInformerFactory logic, i.e. single instance will be shared
@@ -103,7 +103,7 @@ func (s *scopedFlowSchemaInformer) Lister() flowcontrollisterv1beta2.FlowSchemaL
 
 // Informer implements v1beta2.PriorityLevelConfigurationInformer
 func (s *scopedPriorityLevelConfigurationInformer) Informer() cache.SharedIndexInformer {
-	return &common.DelegatingInformer{
+	return &util.DelegatingInformer{
 		ClusterName:            s.clusterName,
 		Resource:               apiflowcontrolv1beta2.Resource("prioritylevelconfigurations"),
 		SharedIndexInformer:    s.delegate.Informer(), // this informer is checked through sharedInformerFactory logic, i.e. single instance will be shared
@@ -141,7 +141,7 @@ func (s *SingleClusterFlowSchemaLister) Get(name string) (*apiflowcontrolv1beta2
 
 // List implements v1beta2.FlowSchemaLister
 func (s *SingleClusterFlowSchemaLister) List(selector labels.Selector) (ret []*apiflowcontrolv1beta2.FlowSchema, err error) {
-	if err := common.ListByIndex(s.indexer, indexers.ByLogicalCluster, s.clusterName.String(), selector, func(obj interface{}) {
+	if err := util.ListByIndex(s.indexer, indexers.ByLogicalCluster, s.clusterName.String(), selector, func(obj interface{}) {
 		ret = append(ret, obj.(*apiflowcontrolv1beta2.FlowSchema))
 	}); err != nil {
 		return nil, err
@@ -172,7 +172,7 @@ func (s *SingleClusterPriorityLevelConfigurationLister) Get(name string) (*apifl
 
 // List implements v1beta2.PriorityLevelConfigurationLister
 func (s *SingleClusterPriorityLevelConfigurationLister) List(selector labels.Selector) (ret []*apiflowcontrolv1beta2.PriorityLevelConfiguration, err error) {
-	if err := common.ListByIndex(s.indexer, indexers.ByLogicalCluster, s.clusterName.String(), selector, func(obj interface{}) {
+	if err := util.ListByIndex(s.indexer, indexers.ByLogicalCluster, s.clusterName.String(), selector, func(obj interface{}) {
 		ret = append(ret, obj.(*apiflowcontrolv1beta2.PriorityLevelConfiguration))
 	}); err != nil {
 		return nil, err

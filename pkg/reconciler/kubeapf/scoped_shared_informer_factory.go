@@ -3,7 +3,7 @@ package kubeapf
 import (
 	reflect "reflect"
 
-	"github.com/kcp-dev/kcp/pkg/reconciler/common"
+	"github.com/kcp-dev/kcp/pkg/reconciler/util"
 	"github.com/kcp-dev/logicalcluster/v2"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -34,13 +34,13 @@ import (
 // targets a specific logical cluster
 type scopingSharedInformerFactory struct {
 	factory                informers.SharedInformerFactory
-	delegatingEventHandler *common.DelegatingEventHandler
+	delegatingEventHandler *util.DelegatingEventHandler
 }
 
 func newScopingSharedInformerFactory(factory informers.SharedInformerFactory) *scopingSharedInformerFactory {
 	return &scopingSharedInformerFactory{
 		factory:                factory,
-		delegatingEventHandler: common.NewDelegatingEventHandler(),
+		delegatingEventHandler: util.NewDelegatingEventHandler(),
 	}
 }
 
@@ -58,7 +58,7 @@ func (f *scopingSharedInformerFactory) ForCluster(clusterName logicalcluster.Nam
 type scopedSharedInformerFactory struct {
 	delegate               informers.SharedInformerFactory
 	clusterName            logicalcluster.Name
-	delegatingEventHandler *common.DelegatingEventHandler
+	delegatingEventHandler *util.DelegatingEventHandler
 }
 
 var _ informers.SharedInformerFactory = &scopedSharedInformerFactory{}

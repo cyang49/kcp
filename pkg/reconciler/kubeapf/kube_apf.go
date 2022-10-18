@@ -138,7 +138,6 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 	scopedInformerFactory := k.scopingSharedInformerFactory.ForCluster(clusterName)
 	flowcontrolClient := k.kubeCluster.Cluster(clusterName).FlowcontrolV1beta2()
 	delegate = utilflowcontrol.New(
-		clusterName.String()+"-controller",
 		scopedInformerFactory,
 		flowcontrolClient,
 		k.serverConcurrencyLimit,
@@ -149,11 +148,11 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 
 	k.delegates[clusterName] = delegate
 	// Start cluster scoped apf controller
-	go delegate.MaintainObservations(k.stopCh) // FIXME: Metric observations need to work per-cluster
+	go delegate.MaintainObservations(k.stopCh) // FIXME: Metric observations need to work per-cluster --> beware of metrics explosion
 	go delegate.Run(k.stopCh)
 
 	// TODO: need to install per-cluster debug endpoint
-	// delegate.Install(k.pathRecorderMux)
+	delegate.Install(k.pathRecorderMux)
 
 	klog.V(3).InfoS("Started new apf controller for cluster", "clusterName", clusterName)
 	return delegate, nil
