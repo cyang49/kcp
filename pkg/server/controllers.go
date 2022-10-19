@@ -1188,17 +1188,18 @@ func (s *Server) installKcpSOCTController(
 	server *genericapiserver.GenericAPIServer,
 ) error {
 	controllerName := "kcp-storage-object-count-tracker-controller"
-	// config = rest.CopyConfig(config)
+	config = rest.CopyConfig(config)
 
-	// config = rest.AddUserAgent(config, controllerName)
-	// kubeClusterClient, err := kubernetesclient.NewClusterForConfig(config)
-	// if err != nil {
-	// 	return err
-	// }
+	config = rest.AddUserAgent(config, controllerName)
+	kubeClusterClient, err := kubernetesclient.NewClusterForConfig(config)
+	if err != nil {
+		return err
+	}
 
 	c := soct.NewSOCTController(
+		kubeClusterClient,
 		s.KcpSharedInformerFactory.Tenancy().V1alpha1().ClusterWorkspaces(),
-		s.ApiExtensionsSharedInformerFactory.Apiextensions().V1().CustomResourceDefinitions(),
+		s.DynamicDiscoverySharedInformerFactory,
 		s.GenericConfig.StorageObjectCountGetterRegistry,
 		s.GenericConfig.KcpStorageObjectCountTracker,
 	)

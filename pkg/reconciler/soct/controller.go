@@ -5,17 +5,16 @@ import (
 	"fmt"
 	"time"
 
-	apisv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/apis/v1alpha1"
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	tenancyinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/tenancy/v1alpha1"
+	"github.com/kcp-dev/kcp/pkg/informer"
 	"github.com/kcp-dev/kcp/pkg/logging"
 	"github.com/kcp-dev/logicalcluster/v2"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions/apiextensions/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
+	kubernetesclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clusters"
 	"k8s.io/client-go/util/workqueue"
@@ -30,44 +29,35 @@ const SOCTControllerName = "kcp-storage-object-count-tracker-controller"
 // observer goroutines to udpate the tracker object counts. It also acts as a multiplexer
 // for API request-driven queries to retrieve the latest resource object count numbers.
 type SOCTController struct {
-	cwQueue        workqueue.RateLimitingInterface
-	crdQueue       workqueue.RateLimitingInterface
-	getterRegistry flowcontrolrequest.StorageObjectCountGetterRegistry
-	tracker        flowcontrolrequest.KcpStorageObjectCountTracker
+	dynamicDiscoverySharedInformerFactory *informer.DynamicDiscoverySharedInformerFactory
+	cwQueue                               workqueue.RateLimitingInterface
+	getterRegistry                        flowcontrolrequest.StorageObjectCountGetterRegistry
+	tracker                               flowcontrolrequest.KcpStorageObjectCountTracker
 
 	getClusterWorkspace func(key string) (*tenancyv1alpha1.ClusterWorkspace, error)
-	getCRD              func(key string) (*apiextensionsv1.CustomResourceDefinition, error)
 }
 
 // NewSOCTController
 func NewSOCTController(
+	kubeClusterClient *kubernetesclient.Cluster,
 	clusterWorkspacesInformer tenancyinformers.ClusterWorkspaceInformer,
-	crdInformer apiextensionsinformers.CustomResourceDefinitionInformer,
+	dynamicDiscoverySharedInformerFactory *informer.DynamicDiscoverySharedInformerFactory,
 	getterRegistry flowcontrolrequest.StorageObjectCountGetterRegistry,
 	tracker flowcontrolrequest.KcpStorageObjectCountTracker,
 ) *SOCTController {
 	c := &SOCTController{
-		cwQueue:  workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
-		crdQueue: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
-
-		getterRegistry: getterRegistry,
-		tracker:        tracker,
+		dynamicDiscoverySharedInformerFactory: dynamicDiscoverySharedInformerFactory,
+		cwQueue:                               workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		getterRegistry:                        getterRegistry,
+		tracker:                               tracker,
 		getClusterWorkspace: func(key string) (*tenancyv1alpha1.ClusterWorkspace, error) {
 			return clusterWorkspacesInformer.Lister().Get(key)
-		},
-		getCRD: func(key string) (*apiextensionsv1.CustomResourceDefinition, error) {
-			return crdInformer.Lister().Get(key)
 		},
 	}
 
 	clusterWorkspacesInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.enqueueClusterWorkspace,
 		DeleteFunc: c.enqueueClusterWorkspace,
-	})
-
-	crdInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    c.enqueueCrd,
-		DeleteFunc: c.enqueueCrd,
 	})
 	return c
 }
@@ -83,40 +73,22 @@ func (c *SOCTController) enqueueClusterWorkspace(obj interface{}) {
 	c.cwQueue.Add(key)
 }
 
-func (c *SOCTController) enqueueCrd(obj interface{}) {
-	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
-	if err != nil {
-		runtime.HandleError(err)
-		return
-	}
-	logger := logging.WithQueueKey(logging.WithReconciler(klog.Background(), SOCTControllerName), key)
-	logger.V(2).Info("queueing CRD")
-	c.crdQueue.Add(key)
-}
-
 // Run starts the SOCT controller. It needs to start updating
 // counters in trackers for APF to work
 func (c *SOCTController) Run(ctx context.Context, stop <-chan struct{}) {
 	defer runtime.HandleCrash()
 	defer c.cwQueue.ShutDown()
-	defer c.crdQueue.ShutDown()
 
 	klog.Infof("Starting %s controller", SOCTControllerName)
 	defer klog.Infof("Shutting down %s controller", SOCTControllerName)
 
 	go wait.Until(func() { c.runClusterWorkspaceWorker(ctx) }, time.Second, stop)
-	go wait.Until(func() { c.runCrdWorker(ctx) }, time.Second, stop)
 
 	<-stop
 }
 
 func (c *SOCTController) runClusterWorkspaceWorker(ctx context.Context) {
 	for c.processNext(ctx, c.cwQueue, c.processClusterWorkspace) {
-	}
-}
-
-func (c *SOCTController) runCrdWorker(ctx context.Context) {
-	for c.processNext(ctx, c.crdQueue, c.processCrd) {
 	}
 }
 
@@ -134,7 +106,7 @@ func (c *SOCTController) processNext(
 
 	logger := logging.WithQueueKey(klog.FromContext(ctx), key)
 	ctx = klog.NewContext(ctx, logger)
-	logger.V(1).Info("soct processing key")
+	logger.V(1).Info("SOCT-processing-key")
 
 	// No matter what, tell the queue we're done with this key, to unblock
 	// other workers.
@@ -147,43 +119,6 @@ func (c *SOCTController) processNext(
 	}
 	queue.Forget(key)
 	return true
-}
-
-func getBoundCluster(crd *apiextensionsv1.CustomResourceDefinition) string {
-	cluster, ok := crd.GetAnnotations()[apisv1alpha1.AnnotationSchemaClusterKey]
-	if !ok {
-		return ""
-	}
-	return cluster
-}
-
-func getResource(crd *apiextensionsv1.CustomResourceDefinition) string {
-	return crd.Spec.Names.Plural
-}
-
-func (c *SOCTController) processCrd(ctx context.Context, key string) error {
-	logger := klog.FromContext(ctx)
-
-	crd, err := c.getCRD(key)
-	cluster := getBoundCluster(crd)
-	resource := getResource(crd)
-
-	logger = logging.WithObject(logger, crd)
-	if err != nil {
-		if kerrors.IsNotFound(err) {
-			logger.V(2).Info("CRD not found - stopping observer for it (if needed)")
-			c.tracker.StopObserving(cluster, resource)
-			return nil
-		}
-		return err
-	}
-	logger.V(2).Info("New CRD - starting observer for it (if needed)")
-	c.tracker.StartObserving(cluster, resource,
-		func() int64 {
-			return c.getterRegistry.GetObjectCount(logicalcluster.New(cluster), resource)
-		},
-	)
-	return nil
 }
 
 func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string) error {
@@ -208,8 +143,49 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 	logger = logging.WithObject(logger, ws)
 	c.tracker.CreateTracker(clusterNameStr)
 	logger.V(2).Info("Cluster tracker started")
-	// TODO: start observer goroutines
-	//       for all api-resources in the logical cluster
+	// c.updateObservers(ctx, clusterName)
 
+	// TODO: start a goroutine to subscribe to changes in API
+	apisChanged := c.dynamicDiscoverySharedInformerFactory.Subscribe("soct-" + clusterName.String())
+	go func() {
+		var discoveryCancel func()
+
+		for {
+			select {
+			case <-ctx.Done():
+				if discoveryCancel != nil {
+					discoveryCancel()
+				}
+
+				return
+			case <-apisChanged:
+				if discoveryCancel != nil {
+					discoveryCancel()
+				}
+
+				logger.V(4).Info("got API change notification")
+
+				ctx, discoveryCancel = context.WithCancel(ctx)
+				c.updateObservers(ctx, clusterName)
+			}
+		}
+	}()
 	return nil
+}
+
+func (c *SOCTController) updateObservers(ctx context.Context, cluster logicalcluster.Name) {
+	// Start observer goroutines for all api resources in the logical cluster
+	listers, notSynced := c.dynamicDiscoverySharedInformerFactory.Listers()
+	// StartObserving might be called multiple times for the same resource
+	// subsequent calls will be ignored
+	for gvr := range listers {
+		c.tracker.StartObserving(cluster.String(), gvr.String(),
+			func() int64 { return c.getterRegistry.GetObjectCount(cluster, gvr.String()) },
+		)
+	}
+	for _, gvr := range notSynced {
+		c.tracker.StartObserving(cluster.String(), gvr.String(),
+			func() int64 { return c.getterRegistry.GetObjectCount(cluster, gvr.String()) },
+		)
+	}
 }
