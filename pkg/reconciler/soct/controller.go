@@ -135,6 +135,8 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.V(2).Info("ClusterWorkspace not found - deleting tracker")
+			c.dynamicDiscoverySharedInformerFactory.Unsubscribe("soct-" + clusterName.String())
+			// FIXME: should also stop discovery threads
 			c.tracker.DeleteTracker(clusterNameStr)
 			return nil
 		}
