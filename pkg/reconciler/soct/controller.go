@@ -82,6 +82,13 @@ func (c *SOCTController) Run(ctx context.Context, stop <-chan struct{}) {
 	klog.Infof("Starting %s controller", SOCTControllerName)
 	defer klog.Infof("Shutting down %s controller", SOCTControllerName)
 
+	// Start trackers of default clusters
+	defaultClusters := []logicalcluster.Name{logicalcluster.New("root")}
+	for _, cluster := range defaultClusters {
+		c.startClusterTracker(ctx, cluster)
+		defer c.stopClusterTracker(ctx, cluster)
+	}
+
 	go wait.Until(func() { c.runClusterWorkspaceWorker(ctx) }, time.Second, stop)
 
 	<-stop
@@ -128,24 +135,27 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 
 	// turn it into root:org:ws
 	clusterName := parent.Join(name)
-	clusterNameStr := clusterName.String()
 	ws, err := c.getClusterWorkspace(key)
-	logger = logger.WithValues("logicalCluster", clusterNameStr)
+	logger = logger.WithValues("logicalCluster", clusterName.String())
 	logger.V(2).Info("processClusterWorkspace called")
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.V(2).Info("ClusterWorkspace not found - deleting tracker")
-			c.dynamicDiscoverySharedInformerFactory.Unsubscribe("soct-" + clusterNameStr)
-			// FIXME: should also stop discovery threads
-			c.tracker.DeleteTracker(clusterNameStr)
+			c.stopClusterTracker(ctx, clusterName)
 			return nil
 		}
 		return err
 	}
 	logger = logging.WithObject(logger, ws)
-	c.tracker.CreateTracker(clusterNameStr)
+	c.startClusterTracker(ctx, clusterName)
 	logger.V(2).Info("Cluster tracker started")
-	// c.updateObservers(ctx, clusterName)
+
+	return nil
+}
+
+func (c *SOCTController) startClusterTracker(ctx context.Context, clusterName logicalcluster.Name) {
+	clusterNameStr := clusterName.String()
+	c.tracker.CreateTracker(clusterNameStr)
 
 	// TODO: start a goroutine to subscribe to changes in API
 	apisChanged := c.dynamicDiscoverySharedInformerFactory.Subscribe("soct-" + clusterNameStr)
@@ -164,15 +174,19 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 				if discoveryCancel != nil {
 					discoveryCancel()
 				}
-
-				logger.V(4).Info("got API change notification")
-
+				// logger.V(4).Info("got API change notification")
 				ctx, discoveryCancel = context.WithCancel(ctx)
 				c.updateObservers(ctx, clusterName)
 			}
 		}
 	}()
-	return nil
+}
+
+func (c *SOCTController) stopClusterTracker(ctx context.Context, clusterName logicalcluster.Name) {
+	clusterNameStr := clusterName.String()
+	c.dynamicDiscoverySharedInformerFactory.Unsubscribe("soct-" + clusterNameStr)
+	// FIXME: should also stop discovery threads
+	c.tracker.DeleteTracker(clusterNameStr)
 }
 
 func (c *SOCTController) updateObservers(ctx context.Context, cluster logicalcluster.Name) {
