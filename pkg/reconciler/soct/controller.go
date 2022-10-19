@@ -83,7 +83,14 @@ func (c *SOCTController) Run(ctx context.Context, stop <-chan struct{}) {
 	defer klog.Infof("Shutting down %s controller", SOCTControllerName)
 
 	// Start trackers of default clusters
-	defaultClusters := []logicalcluster.Name{logicalcluster.New("root")}
+	defaultClusters := []logicalcluster.Name{
+		logicalcluster.New("root"),
+		logicalcluster.New("system:system-crds"),
+		logicalcluster.New("system:shard"),
+		logicalcluster.New("system:admin"),
+		logicalcluster.New("system:bound-crds"),
+		logicalcluster.New("root:compute"),
+	}
 	for _, cluster := range defaultClusters {
 		c.startClusterTracker(ctx, cluster)
 		defer c.stopClusterTracker(ctx, cluster)
