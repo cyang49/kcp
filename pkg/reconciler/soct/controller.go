@@ -135,7 +135,7 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.V(2).Info("ClusterWorkspace not found - deleting tracker")
-			c.dynamicDiscoverySharedInformerFactory.Unsubscribe("soct-" + clusterName.String())
+			c.dynamicDiscoverySharedInformerFactory.Unsubscribe("soct-" + clusterNameStr)
 			// FIXME: should also stop discovery threads
 			c.tracker.DeleteTracker(clusterNameStr)
 			return nil
@@ -148,7 +148,7 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 	// c.updateObservers(ctx, clusterName)
 
 	// TODO: start a goroutine to subscribe to changes in API
-	apisChanged := c.dynamicDiscoverySharedInformerFactory.Subscribe("soct-" + clusterName.String())
+	apisChanged := c.dynamicDiscoverySharedInformerFactory.Subscribe("soct-" + clusterNameStr)
 	go func() {
 		var discoveryCancel func()
 
@@ -178,16 +178,19 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 func (c *SOCTController) updateObservers(ctx context.Context, cluster logicalcluster.Name) {
 	// Start observer goroutines for all api resources in the logical cluster
 	listers, notSynced := c.dynamicDiscoverySharedInformerFactory.Listers()
+
 	// StartObserving might be called multiple times for the same resource
 	// subsequent calls will be ignored
 	for gvr := range listers {
-		c.tracker.StartObserving(cluster.String(), gvr.String(),
-			func() int64 { return c.getterRegistry.GetObjectCount(cluster, gvr.String()) },
+		resourceName := gvr.GroupResource().String()
+		c.tracker.StartObserving(cluster.String(), resourceName,
+			func() int64 { return c.getterRegistry.GetObjectCount(cluster, resourceName) },
 		)
 	}
 	for _, gvr := range notSynced {
-		c.tracker.StartObserving(cluster.String(), gvr.String(),
-			func() int64 { return c.getterRegistry.GetObjectCount(cluster, gvr.String()) },
+		resourceName := gvr.GroupResource().String()
+		c.tracker.StartObserving(cluster.String(), resourceName,
+			func() int64 { return c.getterRegistry.GetObjectCount(cluster, resourceName) },
 		)
 	}
 }
