@@ -75,12 +75,14 @@ func (c *SOCTController) enqueueClusterWorkspace(obj interface{}) {
 
 // Run starts the SOCT controller. It needs to start updating
 // counters in trackers for APF to work
-func (c *SOCTController) Run(ctx context.Context, stop <-chan struct{}) {
+func (c *SOCTController) Run(ctx context.Context) {
 	defer runtime.HandleCrash()
 	defer c.cwQueue.ShutDown()
 
-	klog.Infof("Starting %s controller", SOCTControllerName)
-	defer klog.Infof("Shutting down %s controller", SOCTControllerName)
+	logger := logging.WithReconciler(klog.FromContext(ctx), SOCTControllerName)
+	ctx = klog.NewContext(ctx, logger)
+	logger.Info("Starting controller")
+	defer logger.Info("Shutting down controller")
 
 	// Start trackers of default clusters
 	defaultClusters := []logicalcluster.Name{
@@ -92,13 +94,14 @@ func (c *SOCTController) Run(ctx context.Context, stop <-chan struct{}) {
 		logicalcluster.New("root:compute"),
 	}
 	for _, cluster := range defaultClusters {
+		logger.Info("Starting storage object count tracker for logical cluster", "clusterName", cluster)
 		c.startClusterTracker(ctx, cluster)
 		defer c.stopClusterTracker(ctx, cluster)
 	}
 
-	go wait.Until(func() { c.runClusterWorkspaceWorker(ctx) }, time.Second, stop)
+	go wait.UntilWithContext(ctx, c.runClusterWorkspaceWorker, time.Second)
 
-	<-stop
+	<-ctx.Done()
 }
 
 func (c *SOCTController) runClusterWorkspaceWorker(ctx context.Context) {
@@ -162,9 +165,13 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 
 func (c *SOCTController) startClusterTracker(ctx context.Context, clusterName logicalcluster.Name) {
 	clusterNameStr := clusterName.String()
-	c.tracker.CreateTracker(clusterNameStr)
 
-	// TODO: start a goroutine to subscribe to changes in API
+	// Pass the global context in for the cluster specific tracker created to catch global ctx.Done
+	// so that the pruning and the observer goroutines can be gracefully terminated if global context
+	// is cancelled
+	c.tracker.CreateTracker(ctx, clusterNameStr)
+
+	// Start a goroutine to subscribe to changes in API
 	apisChanged := c.dynamicDiscoverySharedInformerFactory.Subscribe("soct-" + clusterNameStr)
 	go func() {
 		var discoveryCancel func()
@@ -182,7 +189,7 @@ func (c *SOCTController) startClusterTracker(ctx context.Context, clusterName lo
 					discoveryCancel()
 				}
 				// logger.V(4).Info("got API change notification")
-				ctx, discoveryCancel = context.WithCancel(ctx)
+				ctx, discoveryCancel = context.WithCancel(ctx) // TODO: fix the usage of contexts
 				c.updateObservers(ctx, clusterName)
 			}
 		}
@@ -199,6 +206,8 @@ func (c *SOCTController) stopClusterTracker(ctx context.Context, clusterName log
 func (c *SOCTController) updateObservers(ctx context.Context, cluster logicalcluster.Name) {
 	// Start observer goroutines for all api resources in the logical cluster
 	listers, notSynced := c.dynamicDiscoverySharedInformerFactory.Listers()
+
+	// TODO: should pass context into start and stop observer functions
 
 	// StartObserving might be called multiple times for the same resource
 	// subsequent calls will be ignored

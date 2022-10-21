@@ -1212,19 +1212,12 @@ func (s *Server) installKcpSOCTController(
 			return nil // don't klog.Fatal. This only happens when context is cancelled.
 		}
 
-		go c.Run(ctx, hookContext.StopCh)
+		go c.Run(util.GoContext(hookContext))
 
 		return nil
 	}); err != nil {
 		return err
 	}
-
-	// if err := server.AddPreShutdownHook(controllerName, func() error {
-	// 	close(s.quotaAdmissionStopCh)
-	// 	return nil
-	// }); err != nil {
-	// 	return err
-	// }
 
 	return nil
 }
