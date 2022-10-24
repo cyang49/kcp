@@ -173,6 +173,7 @@ func (c *SOCTController) startClusterTracker(ctx context.Context, clusterName lo
 
 	// Start a goroutine to subscribe to changes in API
 	apisChanged := c.dynamicDiscoverySharedInformerFactory.Subscribe("soct-" + clusterNameStr)
+
 	go func() {
 		var discoveryCancel func()
 
@@ -182,15 +183,31 @@ func (c *SOCTController) startClusterTracker(ctx context.Context, clusterName lo
 				if discoveryCancel != nil {
 					discoveryCancel()
 				}
-
 				return
 			case <-apisChanged:
 				if discoveryCancel != nil {
 					discoveryCancel()
 				}
-				// logger.V(4).Info("got API change notification")
-				ctx, discoveryCancel = context.WithCancel(ctx) // TODO: fix the usage of contexts
-				c.updateObservers(ctx, clusterName)
+				apisChangedCtx, cancelFunc := context.WithCancel(ctx)
+				discoveryCancel = cancelFunc
+				// c.updateObservers(apisChangedCtx, clusterName)
+				listers, notSynced := c.dynamicDiscoverySharedInformerFactory.Listers()
+				resourceNames := make([]string, len(listers)+len(notSynced))
+				getterFuncs := make([]func() int64, len(listers)+len(notSynced))
+				i := 0
+				for gvr := range listers {
+					resourceName := gvr.GroupResource().String()
+					resourceNames[i] = resourceName
+					getterFuncs[i] = func() int64 { return c.getterRegistry.GetObjectCount(clusterName, resourceName) }
+					i++
+				}
+				for _, gvr := range notSynced {
+					resourceName := gvr.GroupResource().String()
+					resourceNames[i] = resourceName
+					getterFuncs[i] = func() int64 { return c.getterRegistry.GetObjectCount(clusterName, resourceName) }
+					i++
+				}
+				c.tracker.UpdateObservers(apisChangedCtx, clusterName.String(), resourceNames, getterFuncs)
 			}
 		}
 	}()
@@ -203,24 +220,24 @@ func (c *SOCTController) stopClusterTracker(ctx context.Context, clusterName log
 	c.tracker.DeleteTracker(clusterNameStr)
 }
 
-func (c *SOCTController) updateObservers(ctx context.Context, cluster logicalcluster.Name) {
-	// Start observer goroutines for all api resources in the logical cluster
-	listers, notSynced := c.dynamicDiscoverySharedInformerFactory.Listers()
+// func (c *SOCTController) updateObservers(ctx context.Context, cluster logicalcluster.Name) {
+// 	// Start observer goroutines for all api resources in the logical cluster
+// 	listers, notSynced := c.dynamicDiscoverySharedInformerFactory.Listers()
 
-	// TODO: should pass context into start and stop observer functions
+// 	// TODO: should pass context into start and stop observer functions
 
-	// StartObserving might be called multiple times for the same resource
-	// subsequent calls will be ignored
-	for gvr := range listers {
-		resourceName := gvr.GroupResource().String()
-		c.tracker.StartObserving(cluster.String(), resourceName,
-			func() int64 { return c.getterRegistry.GetObjectCount(cluster, resourceName) },
-		)
-	}
-	for _, gvr := range notSynced {
-		resourceName := gvr.GroupResource().String()
-		c.tracker.StartObserving(cluster.String(), resourceName,
-			func() int64 { return c.getterRegistry.GetObjectCount(cluster, resourceName) },
-		)
-	}
-}
+// 	// StartObserving might be called multiple times for the same resource
+// 	// subsequent calls will be ignored
+// 	for gvr := range listers {
+// 		resourceName := gvr.GroupResource().String()
+// 		c.tracker.StartObserving(ctx, cluster.String(), resourceName,
+// 			func() int64 { return c.getterRegistry.GetObjectCount(cluster, resourceName) },
+// 		)
+// 	}
+// 	for _, gvr := range notSynced {
+// 		resourceName := gvr.GroupResource().String()
+// 		c.tracker.StartObserving(ctx, cluster.String(), resourceName,
+// 			func() int64 { return c.getterRegistry.GetObjectCount(cluster, resourceName) },
+// 		)
+// 	}
+// }
