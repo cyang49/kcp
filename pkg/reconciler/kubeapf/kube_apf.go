@@ -41,11 +41,11 @@ type KubeApfDelegator struct {
 
 	stopCh <-chan struct{}
 
-	utilflowcontrol.WatchTracker
+	utilflowcontrol.KcpWatchTracker
 }
 
 // Make sure utilflowcontrol.Interface is implemented
-var _ utilflowcontrol.Interface = &KubeApfDelegator{}
+// var _ utilflowcontrol.Interface = &KubeApfDelegator{}
 
 // var defaultCluster logicalcluster.Name = logicalcluster.Wildcard
 
@@ -62,7 +62,7 @@ func NewKubeApfDelegator(
 		serverConcurrencyLimit:       serverConcurrencyLimit,
 		requestWaitLimit:             requestWaitLimit,
 		delegates:                    map[logicalcluster.Name]utilflowcontrol.Interface{},
-		WatchTracker:                 utilflowcontrol.NewWatchTracker(),
+		KcpWatchTracker:              utilflowcontrol.NewKcpWatchTracker(),
 	}
 }
 
@@ -82,18 +82,6 @@ func (k *KubeApfDelegator) Handle(ctx context.Context,
 
 	delegate.Handle(ctx, requestDigest, noteFn, workEstimator, queueNoteFn, execFn)
 }
-
-// // GetInterestedWatchCount implements flowcontrol.Interface
-// func (k *KubeApfDelegator) GetInterestedWatchCount(requestInfo *request.RequestInfo) int {
-// 	// FIXME: Figure out the right way to implement WatchTracker
-// 	return k.delegates[defaultCluster].GetInterestedWatchCount(requestInfo)
-// }
-
-// // RegisterWatch implements flowcontrol.Interface
-// func (k *KubeApfDelegator) RegisterWatch(r *http.Request) utilflowcontrol.ForgetWatchFunc {
-// 	// FIXME: Figure out the right way to implement WatchTracker
-// 	return k.delegates[defaultCluster].RegisterWatch(r)
-// }
 
 // Install implements flowcontrol.Interface
 func (k *KubeApfDelegator) Install(c *mux.PathRecorderMux) {
