@@ -95,8 +95,8 @@ func (c *SOCTController) Run(ctx context.Context) {
 	}
 	for _, cluster := range defaultClusters {
 		logger.Info("Starting storage object count tracker for logical cluster", "clusterName", cluster)
-		c.startClusterTracker(ctx, cluster)
-		defer c.stopClusterTracker(ctx, cluster)
+		c.startClusterWorkspaceTracker(ctx, cluster)
+		defer c.stopClusterWorkspaceTracker(ctx, cluster)
 	}
 
 	go wait.UntilWithContext(ctx, c.runClusterWorkspaceWorker, time.Second)
@@ -151,25 +151,25 @@ func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.V(2).Info("ClusterWorkspace not found - deleting tracker")
-			c.stopClusterTracker(ctx, clusterName)
+			c.stopClusterWorkspaceTracker(ctx, clusterName)
 			return nil
 		}
 		return err
 	}
 	logger = logging.WithObject(logger, ws)
-	c.startClusterTracker(ctx, clusterName)
+	c.startClusterWorkspaceTracker(ctx, clusterName)
 	logger.V(2).Info("Cluster tracker started")
 
 	return nil
 }
 
-func (c *SOCTController) startClusterTracker(ctx context.Context, clusterName logicalcluster.Name) {
+func (c *SOCTController) startClusterWorkspaceTracker(ctx context.Context, clusterName logicalcluster.Name) {
 	clusterNameStr := clusterName.String()
 
 	// Pass the global context in for the cluster specific tracker created to catch global ctx.Done
 	// so that the pruning and the observer goroutines can be gracefully terminated if global context
 	// is cancelled
-	c.tracker.CreateTracker(ctx, clusterNameStr)
+	c.tracker.CreateClusterSpecificTracker(ctx, clusterNameStr)
 
 	// Start a goroutine to subscribe to changes in API
 	apisChanged := c.dynamicDiscoverySharedInformerFactory.Subscribe("soct-" + clusterNameStr)
@@ -195,13 +195,13 @@ func (c *SOCTController) startClusterTracker(ctx context.Context, clusterName lo
 
 				for gvr := range listers {
 					resourceName := gvr.GroupResource().String()
-					c.tracker.StartObserving(apisChangedCtx, clusterNameStr, resourceName,
+					c.tracker.EnsureObserving(apisChangedCtx, clusterNameStr, resourceName,
 						func() int64 { return c.getterRegistry.GetObjectCount(clusterName, resourceName) },
 					)
 				}
-				for _, gvr := range notSynced {
+				for _, gvr := range notSynced { // TODO: confirm with Andy and Steve whether this is needed
 					resourceName := gvr.GroupResource().String()
-					c.tracker.StartObserving(apisChangedCtx, clusterNameStr, resourceName,
+					c.tracker.EnsureObserving(apisChangedCtx, clusterNameStr, resourceName,
 						func() int64 { return c.getterRegistry.GetObjectCount(clusterName, resourceName) },
 					)
 				}
@@ -210,9 +210,8 @@ func (c *SOCTController) startClusterTracker(ctx context.Context, clusterName lo
 	}()
 }
 
-func (c *SOCTController) stopClusterTracker(ctx context.Context, clusterName logicalcluster.Name) {
+func (c *SOCTController) stopClusterWorkspaceTracker(ctx context.Context, clusterName logicalcluster.Name) {
 	clusterNameStr := clusterName.String()
 	c.dynamicDiscoverySharedInformerFactory.Unsubscribe("soct-" + clusterNameStr)
-	// FIXME: should also stop discovery threads
-	c.tracker.DeleteTracker(clusterNameStr)
+	c.tracker.DeleteClusterSpecificTracker(clusterNameStr)
 }

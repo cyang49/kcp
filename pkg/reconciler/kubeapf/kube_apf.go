@@ -66,6 +66,8 @@ func NewKubeApfDelegator(
 	}
 }
 
+// TODO: monitor ClusterWorkspace Deletes and remove corresponding delegate
+
 // Handle implements flowcontrol.Interface
 func (k *KubeApfDelegator) Handle(ctx context.Context,
 	requestDigest utilflowcontrol.RequestDigest,
@@ -136,6 +138,7 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 
 	k.delegates[clusterName] = delegate
 	// Start cluster scoped apf controller
+	// TODO(cyang49): There should be life cycle management for cluster specific delegate
 	go delegate.MaintainObservations(k.stopCh) // FIXME: Metric observations need to work per-cluster --> beware of metrics explosion
 	go delegate.Run(k.stopCh)
 
