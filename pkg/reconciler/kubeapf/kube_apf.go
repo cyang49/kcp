@@ -32,13 +32,17 @@ type KubeApfDelegator struct {
 	serverConcurrencyLimit int
 	requestWaitLimit       time.Duration
 
-	// delegates are the references to cluster scoped apf controllers
-	delegates map[logicalcluster.Name]utilflowcontrol.Interface
-
 	lock sync.RWMutex
+	// delegates are the references to cluster specific apf controllers
+	delegates map[logicalcluster.Name]utilflowcontrol.Interface
+	// delegateStopChs are cluster specific stopChs that can be used
+	// to stop single delegate when its corresponding ClusterWorkspace
+	// is removed
+	delegateStopChs map[logicalcluster.Name]chan struct{}
 
 	pathRecorderMux *mux.PathRecorderMux
 
+	// stopCh lets delegator receive stop signal from outside
 	stopCh <-chan struct{}
 
 	utilflowcontrol.KcpWatchTracker
@@ -46,8 +50,6 @@ type KubeApfDelegator struct {
 
 // Make sure utilflowcontrol.Interface is implemented
 // var _ utilflowcontrol.Interface = &KubeApfDelegator{}
-
-// var defaultCluster logicalcluster.Name = logicalcluster.Wildcard
 
 // NewKubeApfDelegator
 func NewKubeApfDelegator(
@@ -62,6 +64,7 @@ func NewKubeApfDelegator(
 		serverConcurrencyLimit:       serverConcurrencyLimit,
 		requestWaitLimit:             requestWaitLimit,
 		delegates:                    map[logicalcluster.Name]utilflowcontrol.Interface{},
+		delegateStopChs:              map[logicalcluster.Name]chan struct{}{},
 		KcpWatchTracker:              utilflowcontrol.NewKcpWatchTracker(),
 	}
 }
@@ -76,33 +79,39 @@ func (k *KubeApfDelegator) Handle(ctx context.Context,
 	queueNoteFn fq.QueueNoteFn,
 	execFn func(),
 ) {
-	// TODO: missing error handling
 	cluster, _ := genericapirequest.ValidClusterFrom(ctx)
 	klog.V(3).InfoS("KubeApfFilter Handle request for cluster ", "clusterName", cluster.Name)
 
 	delegate, _ := k.getOrCreateDelegate(cluster.Name)
-
 	delegate.Handle(ctx, requestDigest, noteFn, workEstimator, queueNoteFn, execFn)
 }
 
 // Install implements flowcontrol.Interface
 func (k *KubeApfDelegator) Install(c *mux.PathRecorderMux) {
-	// k.pathRecorderMux = c // store the reference for Install later
-	// Do nothing for now
+	k.pathRecorderMux = c // store the reference for Install later // FIXME
 }
 
-// MaintainObservations implements flowcontrol.Interface
+// MaintainObservations see comments for the Run function
 func (k *KubeApfDelegator) MaintainObservations(stopCh <-chan struct{}) {
-	// TODO: make sure MaintainObservations implementation works with clusters
-	k.stopCh = stopCh
+	k.lock.Lock()
+	if k.stopCh == nil {
+		k.stopCh = stopCh
+	}
+	k.lock.Unlock()
+	// Block waiting only so that it behaves similarly to cfgCtlr
+	<-stopCh
 }
 
-// Run implements flowcontrol.Interface
-// The delegator doesn't actually call apf controller Run here
-// It stores the stopCh for later use when the cluster scoped
-// apf controllers are created
+// Run doesn't actually call Run functions of delegates directly
+// It stores the stopCh for later use when the cluster specific delegates are created
 func (k *KubeApfDelegator) Run(stopCh <-chan struct{}) error {
-	k.stopCh = stopCh
+	k.lock.Lock()
+	if k.stopCh == nil {
+		k.stopCh = stopCh
+	}
+	k.lock.Unlock()
+	// Block waiting only so that it behaves similarly to cfgCtlr
+	<-stopCh
 	return nil
 }
 
@@ -124,6 +133,15 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 		return delegate, nil
 	}
 
+	delegateStopCh := make(chan struct{})
+	go func() {
+		select {
+		case <-k.stopCh:
+			close(delegateStopCh)
+		case <-delegateStopCh:
+		}
+	}()
+
 	// New delegate uses cluster scoped informer factory and flowcontrol clients
 	scopedInformerFactory := k.scopingSharedInformerFactory.ForCluster(clusterName)
 	flowcontrolClient := k.kubeCluster.Cluster(clusterName).FlowcontrolV1beta2()
@@ -133,17 +151,17 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 		k.serverConcurrencyLimit,
 		k.requestWaitLimit,
 	)
-
-	scopedInformerFactory.Start(k.stopCh)
-
+	scopedInformerFactory.Start(delegateStopCh)
 	k.delegates[clusterName] = delegate
-	// Start cluster scoped apf controller
-	// TODO(cyang49): There should be life cycle management for cluster specific delegate
-	go delegate.MaintainObservations(k.stopCh) // FIXME: Metric observations need to work per-cluster --> beware of metrics explosion
-	go delegate.Run(k.stopCh)
+	k.delegateStopChs[clusterName] = delegateStopCh
+	// TODO: can Unlock here?
+
+	// Run cluster specific apf controller
+	go delegate.MaintainObservations(delegateStopCh) // FIXME: Metric observations need to work per-cluster --> beware of metrics explosion
+	go delegate.Run(delegateStopCh)
 
 	// TODO: need to install per-cluster debug endpoint
-	delegate.Install(k.pathRecorderMux)
+	delegate.Install(k.pathRecorderMux) // FIXME: this is nil
 
 	klog.V(3).InfoS("Started new apf controller for cluster", "clusterName", clusterName)
 	return delegate, nil
