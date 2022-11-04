@@ -2,21 +2,32 @@ package kubeapf
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
+	tenancyinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/tenancy/v1alpha1"
+	"github.com/kcp-dev/kcp/pkg/logging"
 	"github.com/kcp-dev/logicalcluster/v2"
-	kubeinformers "k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/klog/v2"
-
 	flowcontrol "k8s.io/api/flowcontrol/v1beta2"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/server/mux"
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
 	fq "k8s.io/apiserver/pkg/util/flowcontrol/fairqueuing"
 	fcrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
+	kubeinformers "k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/clusters"
+	"k8s.io/client-go/util/workqueue"
+	"k8s.io/klog/v2"
 )
+
+const KubeApfDelegatorName = "kcp-kube-apf-delegator"
 
 // KubeApfDelegator implements k8s APF controller interface
 // it is cluster-aware and manages the life cycles of
@@ -32,6 +43,8 @@ type KubeApfDelegator struct {
 	serverConcurrencyLimit int
 	requestWaitLimit       time.Duration
 
+	cwQueue workqueue.RateLimitingInterface
+
 	lock sync.RWMutex
 	// delegates are the references to cluster specific apf controllers
 	delegates map[logicalcluster.Name]utilflowcontrol.Interface
@@ -46,6 +59,8 @@ type KubeApfDelegator struct {
 	stopCh <-chan struct{}
 
 	utilflowcontrol.KcpWatchTracker
+
+	getClusterWorkspace func(key string) (*tenancyv1alpha1.ClusterWorkspace, error)
 }
 
 // Make sure utilflowcontrol.Interface is implemented
@@ -55,21 +70,28 @@ type KubeApfDelegator struct {
 func NewKubeApfDelegator(
 	informerFactory kubeinformers.SharedInformerFactory,
 	kubeCluster kubernetes.ClusterInterface,
+	clusterWorkspacesInformer tenancyinformers.ClusterWorkspaceInformer,
 	serverConcurrencyLimit int,
 	requestWaitLimit time.Duration,
 ) *KubeApfDelegator {
-	return &KubeApfDelegator{
+	k := &KubeApfDelegator{
 		scopingSharedInformerFactory: newScopingSharedInformerFactory(informerFactory), // not cluster scoped
 		kubeCluster:                  kubeCluster,                                      // can be made cluster scoped
 		serverConcurrencyLimit:       serverConcurrencyLimit,
 		requestWaitLimit:             requestWaitLimit,
+		cwQueue:                      workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		delegates:                    map[logicalcluster.Name]utilflowcontrol.Interface{},
 		delegateStopChs:              map[logicalcluster.Name]chan struct{}{},
 		KcpWatchTracker:              utilflowcontrol.NewKcpWatchTracker(),
+		getClusterWorkspace: func(key string) (*tenancyv1alpha1.ClusterWorkspace, error) {
+			return clusterWorkspacesInformer.Lister().Get(key)
+		},
 	}
+	clusterWorkspacesInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		DeleteFunc: k.enqueueClusterWorkspace,
+	})
+	return k
 }
-
-// TODO: monitor ClusterWorkspace Deletes and remove corresponding delegate
 
 // Handle implements flowcontrol.Interface
 func (k *KubeApfDelegator) Handle(ctx context.Context,
@@ -91,7 +113,8 @@ func (k *KubeApfDelegator) Install(c *mux.PathRecorderMux) {
 	k.pathRecorderMux = c // store the reference for Install later // FIXME
 }
 
-// MaintainObservations see comments for the Run function
+// MaintainObservations doesn't actually call MaintainObservations functions of delegates directly
+// It stores the stopCh for later use
 func (k *KubeApfDelegator) MaintainObservations(stopCh <-chan struct{}) {
 	k.lock.Lock()
 	if k.stopCh == nil {
@@ -102,15 +125,16 @@ func (k *KubeApfDelegator) MaintainObservations(stopCh <-chan struct{}) {
 	<-stopCh
 }
 
-// Run doesn't actually call Run functions of delegates directly
-// It stores the stopCh for later use when the cluster specific delegates are created
+// Run starts a goroutine to watch ClusterWorkspace deletions
 func (k *KubeApfDelegator) Run(stopCh <-chan struct{}) error {
 	k.lock.Lock()
 	if k.stopCh == nil {
 		k.stopCh = stopCh
 	}
 	k.lock.Unlock()
-	// Block waiting only so that it behaves similarly to cfgCtlr
+
+	go wait.Until(k.runClusterWorkspaceWorker, time.Second, stopCh)
+
 	<-stopCh
 	return nil
 }
@@ -165,4 +189,73 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 
 	klog.V(3).InfoS("Started new apf controller for cluster", "clusterName", clusterName)
 	return delegate, nil
+}
+
+func (k *KubeApfDelegator) enqueueClusterWorkspace(obj interface{}) {
+	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	if err != nil {
+		runtime.HandleError(err)
+		return
+	}
+	logger := logging.WithQueueKey(logging.WithReconciler(klog.Background(), KubeApfDelegatorName), key)
+	logger.V(2).Info("queueing ClusterWorkspace")
+	k.cwQueue.Add(key)
+}
+
+func (k *KubeApfDelegator) runClusterWorkspaceWorker() {
+	for k.processNext(k.cwQueue, k.processClusterWorkspace) {
+	}
+}
+
+func (c *KubeApfDelegator) processNext(
+	queue workqueue.RateLimitingInterface,
+	processFunc func(key string) error,
+) bool {
+	// Wait until there is a new item in the working queue
+	k, quit := queue.Get()
+	if quit {
+		return false
+	}
+	key := k.(string)
+
+	// No matter what, tell the queue we're done with this key, to unblock
+	// other workers.
+	defer queue.Done(key)
+
+	if err := processFunc(key); err != nil {
+		runtime.HandleError(fmt.Errorf("%q controller failed to sync %q, err: %w", KubeApfDelegatorName, key, err))
+		queue.AddRateLimited(key)
+		return true
+	}
+	queue.Forget(key)
+	return true
+}
+
+func (k *KubeApfDelegator) processClusterWorkspace(key string) error {
+	// e.g. root:org<separator>ws
+	parent, name := clusters.SplitClusterAwareKey(key)
+
+	// turn it into root:org:ws
+	clusterName := parent.Join(name)
+	_, err := k.getClusterWorkspace(key)
+	if err != nil {
+		if kerrors.IsNotFound(err) {
+			k.stopAndRemoveDelegate(clusterName)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (k *KubeApfDelegator) stopAndRemoveDelegate(cluster logicalcluster.Name) {
+	k.lock.Lock()
+	defer k.lock.Unlock()
+
+	if stopCh, ok := k.delegateStopChs[cluster]; ok {
+		close(stopCh)
+		delete(k.delegateStopChs, cluster)
+	}
+
+	delete(k.delegates, cluster)
 }

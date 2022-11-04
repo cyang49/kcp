@@ -219,17 +219,6 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 		}
 	}
 
-	// Call to BuildPriorityAndFairness in kcp instead of kube
-	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIPriorityAndFairness) && c.Options.GenericControlPlane.GenericServerRunOptions.EnablePriorityAndFairness {
-		c.GenericConfig.FlowControl = kubeapf.NewKubeApfDelegator(
-			c.KubeSharedInformerFactory,
-			c.KubeClusterClient,
-			1600,
-			c.Options.GenericControlPlane.GenericServerRunOptions.RequestTimeout/4,
-		)
-
-	}
-
 	// Setup kcp * informers, but those will need the identities for the APIExports used to make the APIs available.
 	// The identities are not known before we can get them from the APIExports via the loopback client or from the root shard in case this is a non-root shard,
 	// hence we postpone this to getOrCreateKcpIdentities() in the kcp-start-informers post-start hook.
@@ -277,6 +266,19 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 		kcpinformers.WithExtraClusterScopedIndexers(indexers.ClusterScoped()),
 		kcpinformers.WithExtraNamespaceScopedIndexers(indexers.NamespaceScoped()),
 	)
+
+	// Call to BuildPriorityAndFairness in kcp instead of kube
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIPriorityAndFairness) && c.Options.GenericControlPlane.GenericServerRunOptions.EnablePriorityAndFairness {
+		c.GenericConfig.FlowControl = kubeapf.NewKubeApfDelegator(
+			c.KubeSharedInformerFactory,
+			c.KubeClusterClient,
+			c.KcpSharedInformerFactory.Tenancy().V1alpha1().ClusterWorkspaces(),
+			1600,
+			c.Options.GenericControlPlane.GenericServerRunOptions.RequestTimeout/4,
+		)
+
+	}
+
 	c.DeepSARClient, err = kcpkubernetesclientset.NewForConfig(authorization.WithDeepSARConfig(rest.CopyConfig(c.GenericConfig.LoopbackClientConfig)))
 	if err != nil {
 		return nil, err
