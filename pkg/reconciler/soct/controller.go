@@ -173,6 +173,8 @@ func (c *SOCTController) startClusterWorkspaceTracker(ctx context.Context, clust
 
 	// Start a goroutine to subscribe to changes in API
 	apisChanged := c.dynamicDiscoverySharedInformerFactory.Subscribe("soct-" + clusterNameStr)
+	logger := klog.FromContext(ctx)
+	logger = logger.WithValues("logicalCluster", clusterName.String())
 
 	go func() {
 		var discoveryCancel func()
@@ -180,13 +182,14 @@ func (c *SOCTController) startClusterWorkspaceTracker(ctx context.Context, clust
 		for {
 			select {
 			case <-ctx.Done():
-				if discoveryCancel != nil {
-					discoveryCancel()
-				}
 				return
-			case <-apisChanged:
+			case _, more := <-apisChanged:
+				logger.V(2).Info("apisChanged TRIGGERED -- RESETTING Observers")
 				if discoveryCancel != nil {
 					discoveryCancel()
+					if !more { // FIXME: Use cluster specific context instead of relying on apisChanged channel?
+						return
+					}
 				}
 				apisChangedCtx, cancelFunc := context.WithCancel(ctx)
 				discoveryCancel = cancelFunc
