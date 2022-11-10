@@ -15,7 +15,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
-	kubernetesclient "k8s.io/client-go/kubernetes"
+
+	// kubernetesclient "k8s.io/client-go/kubernetes"
+	kcpkubernetesclientset "github.com/kcp-dev/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
@@ -39,7 +41,7 @@ type SOCTController struct {
 
 // NewSOCTController
 func NewSOCTController(
-	kubeClusterClient *kubernetesclient.Cluster,
+	kubeClusterClient *kcpkubernetesclientset.ClusterClientset, // FIXME: unused?
 	clusterWorkspacesInformer tenancyinformers.ClusterWorkspaceInformer,
 	dynamicDiscoverySharedInformerFactory *informer.DynamicDiscoverySharedInformerFactory,
 	getterRegistry flowcontrolrequest.StorageObjectCountGetterRegistry,

@@ -1191,7 +1191,7 @@ func (s *Server) installKcpSOCTController(
 	config = rest.CopyConfig(config)
 
 	config = rest.AddUserAgent(config, controllerName)
-	kubeClusterClient, err := kubernetesclient.NewClusterForConfig(config)
+	kubeClusterClient, err := kcpkubernetesclientset.NewForConfig(config)
 	if err != nil {
 		return err
 	}
@@ -1212,7 +1212,7 @@ func (s *Server) installKcpSOCTController(
 			return nil // don't klog.Fatal. This only happens when context is cancelled.
 		}
 
-		go c.Run(util.GoContext(hookContext))
+		go c.Run(goContext(hookContext))
 
 		return nil
 	}); err != nil {
