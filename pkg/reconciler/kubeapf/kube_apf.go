@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
+	"github.com/kcp-dev/kcp/pkg/client"
 	tenancyinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/tenancy/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/logging"
 	"github.com/kcp-dev/logicalcluster/v2"
@@ -22,7 +23,6 @@ import (
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clusters"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 )
@@ -233,7 +233,7 @@ func (c *KubeApfDelegator) processNext(
 
 func (k *KubeApfDelegator) processClusterWorkspace(key string) error {
 	// e.g. root:org<separator>ws
-	parent, name := clusters.SplitClusterAwareKey(key)
+	parent, name := client.SplitClusterAwareKey(key)
 
 	// turn it into root:org:ws
 	clusterName := parent.Join(name)

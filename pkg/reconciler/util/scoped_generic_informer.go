@@ -1,6 +1,7 @@
 package util
 
 import (
+	"github.com/kcp-dev/kcp/pkg/client"
 	"github.com/kcp-dev/kcp/pkg/indexers"
 	"github.com/kcp-dev/logicalcluster/v2"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -10,7 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clusters"
 )
 
 // scopedGenericInformer wraps an informers.GenericInformer and produces instances of cache.GenericLister that are
@@ -68,7 +68,7 @@ func (s *scopedGenericLister) ByNamespace(namespace string) cache.GenericNamespa
 
 // Get returns the runtime.Object from the cache.Indexer identified by name, from the appropriate logical cluster.
 func (s *scopedGenericLister) Get(name string) (runtime.Object, error) {
-	key := clusters.ToClusterAwareKey(s.clusterName, name)
+	key := client.ToClusterAwareKey(s.clusterName, name)
 	obj, exists, err := s.indexer.GetByKey(key)
 	if err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func (s *scopedGenericNamespaceLister) List(selector labels.Selector) (ret []run
 		indexValue = s.clusterName.String()
 	} else {
 		indexName = indexers.ByLogicalClusterAndNamespace
-		indexValue = clusters.ToClusterAwareKey(s.clusterName, s.namespace)
+		indexValue = client.ToClusterAwareKey(s.clusterName, s.namespace)
 	}
 	err = ListByIndex(s.indexer, indexName, indexValue, selector, func(obj interface{}) {
 		ret = append(ret, obj.(runtime.Object))

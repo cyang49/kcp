@@ -1,6 +1,7 @@
 package kubeapf
 
 import (
+	"github.com/kcp-dev/kcp/pkg/client"
 	"github.com/kcp-dev/kcp/pkg/indexers"
 	"github.com/kcp-dev/kcp/pkg/reconciler/util"
 	"github.com/kcp-dev/logicalcluster/v2"
@@ -13,7 +14,6 @@ import (
 	v1beta2 "k8s.io/client-go/informers/flowcontrol/v1beta2"
 	flowcontrollisterv1beta2 "k8s.io/client-go/listers/flowcontrol/v1beta2"
 	cache "k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clusters"
 )
 
 type scopedFlowcontrol struct {
@@ -128,7 +128,7 @@ var _ flowcontrollisterv1beta2.FlowSchemaLister = &SingleClusterFlowSchemaLister
 
 // Get implements v1beta2.FlowSchemaLister
 func (s *SingleClusterFlowSchemaLister) Get(name string) (*apiflowcontrolv1beta2.FlowSchema, error) {
-	key := clusters.ToClusterAwareKey(s.clusterName, name) // FIXME: not sure if this is the right way
+	key := client.ToClusterAwareKey(s.clusterName, name) // FIXME: not sure if this is the right way
 	obj, exists, err := s.indexer.GetByKey(key)
 	if err != nil {
 		return nil, err
@@ -159,7 +159,7 @@ var _ flowcontrollisterv1beta2.PriorityLevelConfigurationLister = &SingleCluster
 
 // Get implements v1beta2.PriorityLevelConfigurationLister
 func (s *SingleClusterPriorityLevelConfigurationLister) Get(name string) (*apiflowcontrolv1beta2.PriorityLevelConfiguration, error) {
-	key := clusters.ToClusterAwareKey(s.clusterName, name) // FIXME: not sure if this is the right way
+	key := client.ToClusterAwareKey(s.clusterName, name) // FIXME: not sure if this is the right way
 	obj, exists, err := s.indexer.GetByKey(key)
 	if err != nil {
 		return nil, err

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
+	"github.com/kcp-dev/kcp/pkg/client"
 	tenancyinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/tenancy/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/informer"
 	"github.com/kcp-dev/kcp/pkg/logging"
@@ -16,7 +17,6 @@ import (
 	flowcontrolrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
 	kubernetesclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clusters"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 )
@@ -141,7 +141,7 @@ func (c *SOCTController) processNext(
 func (c *SOCTController) processClusterWorkspace(ctx context.Context, key string) error {
 	logger := klog.FromContext(ctx)
 	// e.g. root:org<separator>ws
-	parent, name := clusters.SplitClusterAwareKey(key)
+	parent, name := client.SplitClusterAwareKey(key)
 
 	// turn it into root:org:ws
 	clusterName := parent.Join(name)

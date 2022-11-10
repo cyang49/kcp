@@ -1,10 +1,10 @@
 package util
 
 import (
+	"github.com/kcp-dev/kcp/pkg/client"
 	"github.com/kcp-dev/logicalcluster/v2"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clusters"
 )
 
 func ClusterNameForObj(obj interface{}) logicalcluster.Name {
@@ -20,6 +20,6 @@ func ClusterNameForObj(obj interface{}) logicalcluster.Name {
 		return logicalcluster.Name{}
 	}
 
-	cluster, _ := clusters.SplitClusterAwareKey(clusterAndName)
+	cluster, _ := client.SplitClusterAwareKey(clusterAndName)
 	return cluster
 }
