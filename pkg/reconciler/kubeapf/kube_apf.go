@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	kcpkubernetesinformers "github.com/kcp-dev/client-go/informers"
 	tenancyv1alpha1 "github.com/kcp-dev/kcp/pkg/apis/tenancy/v1alpha1"
 	"github.com/kcp-dev/kcp/pkg/client"
 	tenancyinformers "github.com/kcp-dev/kcp/pkg/client/informers/externalversions/tenancy/v1alpha1"
@@ -20,7 +21,6 @@ import (
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
 	fq "k8s.io/apiserver/pkg/util/flowcontrol/fairqueuing"
 	fcrequest "k8s.io/apiserver/pkg/util/flowcontrol/request"
-	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -35,7 +35,7 @@ const KubeApfDelegatorName = "kcp-kube-apf-delegator"
 // requests from the handler chain to them
 type KubeApfDelegator struct {
 	// scopingInformerFactory is not cluster scoped but can be made cluster scoped
-	scopingSharedInformerFactory *scopingSharedInformerFactory
+	scopingSharedInformerFactory kcpkubernetesinformers.SharedInformerFactory
 	// kubeCluster ClusterInterface can be used to get cluster scoped clientset
 	kubeCluster kubernetes.ClusterInterface
 
@@ -68,15 +68,15 @@ type KubeApfDelegator struct {
 
 // NewKubeApfDelegator
 func NewKubeApfDelegator(
-	informerFactory kubeinformers.SharedInformerFactory,
+	informerFactory kcpkubernetesinformers.SharedInformerFactory,
 	kubeCluster kubernetes.ClusterInterface,
 	clusterWorkspacesInformer tenancyinformers.ClusterWorkspaceInformer,
 	serverConcurrencyLimit int,
 	requestWaitLimit time.Duration,
 ) *KubeApfDelegator {
 	k := &KubeApfDelegator{
-		scopingSharedInformerFactory: newScopingSharedInformerFactory(informerFactory), // not cluster scoped
-		kubeCluster:                  kubeCluster,                                      // can be made cluster scoped
+		scopingSharedInformerFactory: informerFactory, // not cluster scoped
+		kubeCluster:                  kubeCluster,     // can be made cluster scoped
 		serverConcurrencyLimit:       serverConcurrencyLimit,
 		requestWaitLimit:             requestWaitLimit,
 		cwQueue:                      workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
@@ -167,15 +167,18 @@ func (k *KubeApfDelegator) getOrCreateDelegate(clusterName logicalcluster.Name) 
 	}()
 
 	// New delegate uses cluster scoped informer factory and flowcontrol clients
-	scopedInformerFactory := k.scopingSharedInformerFactory.ForCluster(clusterName)
+	scopedFlowSchemaInformer := k.scopingSharedInformerFactory.Flowcontrol().V1beta2().FlowSchemas().Cluster(clusterName)
+	scopedPriorityLevelConfigurationInformer := k.scopingSharedInformerFactory.Flowcontrol().V1beta2().PriorityLevelConfigurations().Cluster(clusterName)
+
 	flowcontrolClient := k.kubeCluster.Cluster(clusterName).FlowcontrolV1beta2()
 	delegate = utilflowcontrol.New(
-		scopedInformerFactory,
+		scopedFlowSchemaInformer,
+		scopedPriorityLevelConfigurationInformer,
 		flowcontrolClient,
 		k.serverConcurrencyLimit,
 		k.requestWaitLimit,
 	)
-	scopedInformerFactory.Start(delegateStopCh)
+	// scopedInformerFactory.Start(delegateStopCh)
 	k.delegates[clusterName] = delegate
 	k.delegateStopChs[clusterName] = delegateStopCh
 	// TODO: can Unlock here?
