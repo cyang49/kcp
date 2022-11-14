@@ -62,10 +62,13 @@ import (
 	"github.com/kcp-dev/kcp/pkg/informer"
 	"github.com/kcp-dev/kcp/pkg/server/bootstrap"
 	kcpfilters "github.com/kcp-dev/kcp/pkg/server/filters"
+	"github.com/kcp-dev/kcp/pkg/reconciler/kubeapf"
 	kcpserveroptions "github.com/kcp-dev/kcp/pkg/server/options"
 	"github.com/kcp-dev/kcp/pkg/server/options/batteries"
 	"github.com/kcp-dev/kcp/pkg/server/requestinfo"
 	"github.com/kcp-dev/kcp/pkg/tunneler"
+	genericfeatures "k8s.io/apiserver/pkg/features"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
 
 type Config struct {
@@ -263,6 +266,19 @@ func NewConfig(opts *kcpserveroptions.CompletedOptions) (*Config, error) {
 		kcpinformers.WithExtraClusterScopedIndexers(indexers.ClusterScoped()),
 		kcpinformers.WithExtraNamespaceScopedIndexers(indexers.NamespaceScoped()),
 	)
+
+	// Call to BuildPriorityAndFairness in kcp instead of kube
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIPriorityAndFairness) && c.Options.GenericControlPlane.GenericServerRunOptions.EnablePriorityAndFairness {
+		c.GenericConfig.FlowControl = kubeapf.NewKubeApfDelegator(
+			c.KubeSharedInformerFactory,
+			c.KubeClusterClient,
+			c.KcpSharedInformerFactory.Tenancy().V1alpha1().ClusterWorkspaces(),
+			1600,
+			c.Options.GenericControlPlane.GenericServerRunOptions.RequestTimeout/4,
+		)
+
+	}
+
 	c.DeepSARClient, err = kcpkubernetesclientset.NewForConfig(authorization.WithDeepSARConfig(rest.CopyConfig(c.GenericConfig.LoopbackClientConfig)))
 	if err != nil {
 		return nil, err

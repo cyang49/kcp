@@ -67,6 +67,7 @@ import (
 	"github.com/kcp-dev/kcp/pkg/reconciler/kubequota"
 	schedulinglocationstatus "github.com/kcp-dev/kcp/pkg/reconciler/scheduling/location"
 	schedulingplacement "github.com/kcp-dev/kcp/pkg/reconciler/scheduling/placement"
+	"github.com/kcp-dev/kcp/pkg/reconciler/soct"
 	"github.com/kcp-dev/kcp/pkg/reconciler/tenancy/bootstrap"
 	"github.com/kcp-dev/kcp/pkg/reconciler/tenancy/clusterworkspace"
 	"github.com/kcp-dev/kcp/pkg/reconciler/tenancy/clusterworkspacedeletion"
@@ -1173,6 +1174,46 @@ func (s *Server) installKubeQuotaController(
 
 	if err := server.AddPreShutdownHook(kubequota.ControllerName, func() error {
 		close(s.quotaAdmissionStopCh)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Server) installKcpSOCTController(
+	ctx context.Context,
+	config *rest.Config,
+	server *genericapiserver.GenericAPIServer,
+) error {
+	controllerName := "kcp-storage-object-count-tracker-controller"
+	config = rest.CopyConfig(config)
+
+	config = rest.AddUserAgent(config, controllerName)
+	kubeClusterClient, err := kcpkubernetesclientset.NewForConfig(config)
+	if err != nil {
+		return err
+	}
+
+	c := soct.NewSOCTController(
+		kubeClusterClient,
+		s.KcpSharedInformerFactory.Tenancy().V1alpha1().ClusterWorkspaces(),
+		s.DynamicDiscoverySharedInformerFactory,
+		s.GenericConfig.StorageObjectCountGetterRegistry,
+		s.GenericConfig.KcpStorageObjectCountTracker,
+	)
+
+	if err := server.AddPostStartHook(postStartHookName(controllerName), func(hookContext genericapiserver.PostStartHookContext) error {
+		logger := klog.FromContext(ctx).WithValues("postStartHook", postStartHookName(controllerName))
+		if err := s.waitForSync(hookContext.StopCh); err != nil {
+			logger.Error(err, "failed to finish post-start-hook")
+			// nolint:nilerr
+			return nil // don't klog.Fatal. This only happens when context is cancelled.
+		}
+
+		go c.Run(goContext(hookContext))
+
 		return nil
 	}); err != nil {
 		return err
